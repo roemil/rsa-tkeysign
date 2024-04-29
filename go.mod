@@ -2,8 +2,6 @@ module github.com/tillitis/tkeysign
 
 go 1.19
 
-replace github.com/tillitis/tkeyclient => ../tkeyclient
-
 require github.com/tillitis/tkeyclient v1.0.0
 
 require (
