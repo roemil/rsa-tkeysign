@@ -1,7 +1,7 @@
 // Copyright (C) 2022-2024 - Tillitis AB
 // SPDX-License-Identifier: GPL-2.0-only
 
-// Package tkeysign provides a connection to the ed25519 signer app
+// Package tkeysign provides a connection to the RSA signer app
 // running on the TKey. You're expected to pass an existing connection
 // to it, so use it like this:
 //
@@ -67,7 +67,7 @@ type Signer struct {
 	tk *tkeyclient.TillitisKey // A connection to a TKey
 }
 
-// New allocates a struct for communicating with the ed25519 signer
+// New allocates a struct for communicating with the RSA signer
 // app running on the TKey. You're expected to pass an existing
 // connection to it, so use it like this:
 //
@@ -168,7 +168,7 @@ func (s Signer) GetPubkey() ([]byte, error) {
 	return pubkeyRaw, nil
 }
 
-// Sign signs the message in data and returns an ed25519 signature.
+// Sign signs the message in data and returns an RSA signature.
 func (s Signer) Sign(data []byte) ([]byte, error) {
 	err := s.setSize(len(data))
 	if err != nil {
