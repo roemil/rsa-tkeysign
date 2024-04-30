@@ -1,4 +1,4 @@
-module github.com/roemil/rsa-tkeysign
+module github.com/roemil/tkeysign
 
 go 1.19
 

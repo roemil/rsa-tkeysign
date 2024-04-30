@@ -16,7 +16,7 @@
 // And like this to sign a message:
 //
 //	signature, err := signer.Sign(message)
-package rsa-tkeysign
+package tkeysign
 
 import (
 	"fmt"
