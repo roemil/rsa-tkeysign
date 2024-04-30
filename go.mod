@@ -1,4 +1,4 @@
-module github.com/tillitis/tkeysign
+module github.com/roemil/rsa-tkeysign
 
 go 1.19
 
