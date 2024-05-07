@@ -37,6 +37,7 @@ var (
 	rspGetNameVersion  = appCmd{0x0a, "rspGetNameVersion", tkeyclient.CmdLen32}
 	cmdGetFirmwareHash = appCmd{0x0b, "cmdGetFirmwareHash", tkeyclient.CmdLen32}
 	rspGetFirmwareHash = appCmd{0x0c, "rspGetFirmwareHash", tkeyclient.CmdLen128}
+	cmdLoadKey         = appCmd{0x0d, "cmdLoadKey", tkeyclient.CmdLen128}
 )
 
 const MaxSignSize = 4096
@@ -194,6 +195,25 @@ func (s Signer) Sign(data []byte) ([]byte, error) {
 	return signature, nil
 }
 
+func (s Signer) LoadData(data []byte) error {
+	err := s.setSize(len(data))
+	if err != nil {
+		return fmt.Errorf("setSize: %w", err)
+	}
+	var offset int
+	for nsent := 0; offset < len(data); offset += nsent {
+		nsent, err = s.keyLoad(data[offset:])
+		if err != nil {
+			return fmt.Errorf("keyLoad: %w", err)
+		}
+	}
+	if offset > len(data) {
+		return fmt.Errorf("transmitted more than expected")
+	}
+
+	return nil
+}
+
 // SetSize sets the size of the data to sign.
 func (s Signer) setSize(size int) error {
 	id := 2
@@ -235,6 +255,42 @@ func (s Signer) signLoad(content []byte) (int, error) {
 	}
 
 	payload := make([]byte, cmdSignData.CmdLen().Bytelen()-1)
+	copied := copy(payload, content)
+
+	// Add padding if not filling the payload buffer.
+	if copied < len(payload) {
+		padding := make([]byte, len(payload)-copied)
+		copy(payload[copied:], padding)
+	}
+
+	copy(tx[2:], payload)
+
+	tkeyclient.Dump("LoadSignData tx", tx)
+	if err = s.tk.Write(tx); err != nil {
+		return 0, fmt.Errorf("Write: %w", err)
+	}
+
+	// Wait for reply
+	rx, _, err := s.tk.ReadFrame(rspSignData, id)
+	if err != nil {
+		return 0, fmt.Errorf("ReadFrame: %w", err)
+	}
+
+	if rx[2] != tkeyclient.StatusOK {
+		return 0, fmt.Errorf("SignData NOK")
+	}
+
+	return copied, nil
+}
+
+func (s Signer) keyLoad(content []byte) (int, error) {
+	id := 2
+	tx, err := tkeyclient.NewFrameBuf(cmdLoadKey, id)
+	if err != nil {
+		return 0, fmt.Errorf("NewFrameBuf: %w", err)
+	}
+
+	payload := make([]byte, cmdLoadKey.CmdLen().Bytelen()-1)
 	copied := copy(payload, content)
 
 	// Add padding if not filling the payload buffer.
