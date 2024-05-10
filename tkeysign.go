@@ -19,7 +19,9 @@
 package tkeysign
 
 import (
+	"encoding/pem"
 	"fmt"
+	"os"
 
 	"github.com/tillitis/tkeyclient"
 )
@@ -225,14 +227,69 @@ func (s Signer) GetIsKeyLoaded() (bool, error) {
 	return rx[2] == 1, nil
 }
 
-func (s Signer) LoadRawKey(data []byte) error {
+func (s Signer) LoadKey(rsaKeyPath string) error {
+	f, err := os.Open(rsaKeyPath)
+	if err != nil {
+		return fmt.Errorf("failed to open id_rsa. %s", err.Error())
+	}
+	key := make([]byte, 1676)
+	n1, err := f.Read(key)
+	if n1 < 1675 {
+		return fmt.Errorf("did not read enough. Read: %d", n1)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to read: %w", err)
+	}
+
+	f.Close()
+
+	block, _ := pem.Decode(key)
+	if block != nil {
+		encrypted_key, err := s.encryptKey(key)
+		if err != nil {
+			return fmt.Errorf("failed to encrypt: %w", err)
+		}
+		f, err := os.OpenFile(rsaKeyPath, os.O_RDWR, 0755)
+		if err != nil {
+			return fmt.Errorf("failed to open id_rsa for write. %s", err.Error())
+		}
+		n, err := f.Write([]byte(encrypted_key))
+		if n != len(key) {
+			return fmt.Errorf("did not write enough data: %d", n)
+		}
+		if err != nil {
+			return fmt.Errorf("failed to write: %w", err)
+		}
+		err = s.parseKey()
+		if err != nil {
+			return fmt.Errorf("parseKey: %w", err)
+		}
+	} else {
+		err = s.loadEncKey(key)
+		if err != nil {
+			return fmt.Errorf("failed load keye: %w", err)
+		}
+		err := s.decryptKey()
+		if err != nil {
+			return fmt.Errorf("decryptKey: %w", err)
+		}
+		err = s.parseKey()
+		if err != nil {
+			return fmt.Errorf("parseKey: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (s Signer) transferKey(data []byte) error {
 	err := s.setSize(len(data))
 	if err != nil {
 		return fmt.Errorf("setSize: %w", err)
 	}
 	var offset int
 	for nsent := 0; offset < len(data); offset += nsent {
-		nsent, err = s.loadRawKey(data[offset:])
+		nsent, err = s.transferPiece(data[offset:])
 		if err != nil {
 			return fmt.Errorf("keyLoad: %w", err)
 		}
@@ -244,7 +301,7 @@ func (s Signer) LoadRawKey(data []byte) error {
 	return nil
 }
 
-func (s Signer) LoadEncKey(data []byte) error {
+func (s Signer) loadEncKey(data []byte) error {
 	err := s.setSize(len(data))
 	if err != nil {
 		return fmt.Errorf("setSize: %w", err)
@@ -263,10 +320,10 @@ func (s Signer) LoadEncKey(data []byte) error {
 	return nil
 }
 
-func (s Signer) EncryptKey(data []byte) ([]byte, error) {
-	err := s.LoadRawKey(data)
+func (s Signer) encryptKey(data []byte) ([]byte, error) {
+	err := s.transferKey(data)
 	if err != nil {
-		return nil, fmt.Errorf("LoadData: %w", err)
+		return nil, fmt.Errorf("transferKey: %w", err)
 	}
 
 	encData, err := s.keyEncrypt()
@@ -274,14 +331,6 @@ func (s Signer) EncryptKey(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("zv: %w", err)
 	}
 	return encData, nil
-}
-
-func (s Signer) ParseKey() error {
-	err := s.parseKey()
-	if err != nil {
-		return fmt.Errorf("ParseKey: %w", err)
-	}
-	return nil
 }
 
 func (s Signer) parseKey() error {
@@ -301,14 +350,6 @@ func (s Signer) parseKey() error {
 	}
 	if rx[2] != tkeyclient.StatusOK {
 		return fmt.Errorf("parseKey NOK")
-	}
-	return nil
-}
-
-func (s Signer) DecryptKey() error {
-	err := s.decryptKey()
-	if err != nil {
-		return fmt.Errorf("ParseKey: %w", err)
 	}
 	return nil
 }
@@ -403,7 +444,7 @@ func (s Signer) signLoad(content []byte) (int, error) {
 	return copied, nil
 }
 
-func (s Signer) loadRawKey(content []byte) (int, error) {
+func (s Signer) transferPiece(content []byte) (int, error) {
 	id := 2
 	tx, err := tkeyclient.NewFrameBuf(cmdLoadKey, id)
 	if err != nil {
@@ -421,7 +462,7 @@ func (s Signer) loadRawKey(content []byte) (int, error) {
 
 	copy(tx[2:], payload)
 
-	tkeyclient.Dump("LoadSignData tx", tx)
+	tkeyclient.Dump("cmdLoadKey tx", tx)
 	if err = s.tk.Write(tx); err != nil {
 		return 0, fmt.Errorf("Write: %w", err)
 	}
@@ -457,7 +498,7 @@ func (s Signer) keyEncLoad(content []byte) (int, error) {
 
 	copy(tx[2:], payload)
 
-	tkeyclient.Dump("LoadSignData tx", tx)
+	tkeyclient.Dump("cmdLoadEncKey tx", tx)
 	if err = s.tk.Write(tx); err != nil {
 		return 0, fmt.Errorf("Write: %w", err)
 	}
