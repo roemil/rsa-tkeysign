@@ -38,6 +38,16 @@ var (
 	cmdGetFirmwareHash = appCmd{0x0b, "cmdGetFirmwareHash", tkeyclient.CmdLen32}
 	rspGetFirmwareHash = appCmd{0x0c, "rspGetFirmwareHash", tkeyclient.CmdLen128}
 	cmdLoadKey         = appCmd{0x0d, "cmdLoadKey", tkeyclient.CmdLen128}
+	cmdEncryptKey      = appCmd{0x0e, "cmdEncryptKey", tkeyclient.CmdLen1}
+	rspEncryptKey      = appCmd{0x0f, "rspEncryptKey", tkeyclient.CmdLen128}
+	cmdLoadEncKey      = appCmd{0x10, "cmdLoadEncKey", tkeyclient.CmdLen128}
+	cmdIsKeyLoaded     = appCmd{0x11, "cmdIsKeyLoaded", tkeyclient.CmdLen1}
+	rspIsKeyLoaded     = appCmd{0x12, "rspIsKeyLoaded", tkeyclient.CmdLen4}
+
+	cmdDecryptKey = appCmd{0x13, "cmdDecryptKey", tkeyclient.CmdLen1}
+	rspDecryptKey = appCmd{0x14, "rspDecryptKey", tkeyclient.CmdLen4}
+	cmdParseKey   = appCmd{0x15, "cmdParseKey", tkeyclient.CmdLen1}
+	rspParseKey   = appCmd{0x16, "rspParseKey", tkeyclient.CmdLen4}
 )
 
 const MaxSignSize = 4096
@@ -195,14 +205,34 @@ func (s Signer) Sign(data []byte) ([]byte, error) {
 	return signature, nil
 }
 
-func (s Signer) LoadData(data []byte) error {
+func (s Signer) GetIsKeyLoaded() (bool, error) {
+	id := 2
+	tx, err := tkeyclient.NewFrameBuf(cmdIsKeyLoaded, id)
+	if err != nil {
+		return false, fmt.Errorf("NewFrameBuf: %w", err)
+	}
+
+	tkeyclient.Dump("cmdIsKeyLoaded tx", tx)
+	if err = s.tk.Write(tx); err != nil {
+		return false, fmt.Errorf("Write: %w", err)
+	}
+	rx, _, err := s.tk.ReadFrame(rspIsKeyLoaded, id)
+	tkeyclient.Dump("SetAppSize rx", rx)
+	if err != nil {
+		return false, fmt.Errorf("ReadFrame: %w", err)
+	}
+
+	return rx[2] == 1, nil
+}
+
+func (s Signer) LoadRawKey(data []byte) error {
 	err := s.setSize(len(data))
 	if err != nil {
 		return fmt.Errorf("setSize: %w", err)
 	}
 	var offset int
 	for nsent := 0; offset < len(data); offset += nsent {
-		nsent, err = s.keyLoad(data[offset:])
+		nsent, err = s.loadRawKey(data[offset:])
 		if err != nil {
 			return fmt.Errorf("keyLoad: %w", err)
 		}
@@ -211,6 +241,96 @@ func (s Signer) LoadData(data []byte) error {
 		return fmt.Errorf("transmitted more than expected")
 	}
 
+	return nil
+}
+
+func (s Signer) LoadEncKey(data []byte) error {
+	err := s.setSize(len(data))
+	if err != nil {
+		return fmt.Errorf("setSize: %w", err)
+	}
+	var offset int
+	for nsent := 0; offset < len(data); offset += nsent {
+		nsent, err = s.keyEncLoad(data[offset:])
+		if err != nil {
+			return fmt.Errorf("keyLoad: %w", err)
+		}
+	}
+	if offset > len(data) {
+		return fmt.Errorf("transmitted more than expected")
+	}
+
+	return nil
+}
+
+func (s Signer) EncryptKey(data []byte) ([]byte, error) {
+	err := s.LoadRawKey(data)
+	if err != nil {
+		return nil, fmt.Errorf("LoadData: %w", err)
+	}
+
+	encData, err := s.keyEncrypt()
+	if err != nil {
+		return nil, fmt.Errorf("zv: %w", err)
+	}
+	return encData, nil
+}
+
+func (s Signer) ParseKey() error {
+	err := s.parseKey()
+	if err != nil {
+		return fmt.Errorf("ParseKey: %w", err)
+	}
+	return nil
+}
+
+func (s Signer) parseKey() error {
+	id := 2
+	tx, err := tkeyclient.NewFrameBuf(cmdParseKey, id)
+	if err != nil {
+		return fmt.Errorf("NewFrameBuf: %w", err)
+	}
+	tkeyclient.Dump("cmdParseKey tx", tx)
+	if err = s.tk.Write(tx); err != nil {
+		return fmt.Errorf("Write: %w", err)
+	}
+	rx, _, err := s.tk.ReadFrame(rspParseKey, id)
+	tkeyclient.Dump("rspParseKey rx", rx)
+	if err != nil {
+		return fmt.Errorf("ReadFrame: %w", err)
+	}
+	if rx[2] != tkeyclient.StatusOK {
+		return fmt.Errorf("parseKey NOK")
+	}
+	return nil
+}
+
+func (s Signer) DecryptKey() error {
+	err := s.decryptKey()
+	if err != nil {
+		return fmt.Errorf("ParseKey: %w", err)
+	}
+	return nil
+}
+
+func (s Signer) decryptKey() error {
+	id := 2
+	tx, err := tkeyclient.NewFrameBuf(cmdDecryptKey, id)
+	if err != nil {
+		return fmt.Errorf("NewFrameBuf: %w", err)
+	}
+	tkeyclient.Dump("cmdDecryptKey tx", tx)
+	if err = s.tk.Write(tx); err != nil {
+		return fmt.Errorf("Write: %w", err)
+	}
+	rx, _, err := s.tk.ReadFrame(rspDecryptKey, id)
+	tkeyclient.Dump("rspDecryptKey rx", rx)
+	if err != nil {
+		return fmt.Errorf("ReadFrame: %w", err)
+	}
+	if rx[2] != tkeyclient.StatusOK {
+		return fmt.Errorf("decryptKey NOK")
+	}
 	return nil
 }
 
@@ -283,7 +403,7 @@ func (s Signer) signLoad(content []byte) (int, error) {
 	return copied, nil
 }
 
-func (s Signer) keyLoad(content []byte) (int, error) {
+func (s Signer) loadRawKey(content []byte) (int, error) {
 	id := 2
 	tx, err := tkeyclient.NewFrameBuf(cmdLoadKey, id)
 	if err != nil {
@@ -317,6 +437,80 @@ func (s Signer) keyLoad(content []byte) (int, error) {
 	}
 
 	return copied, nil
+}
+
+func (s Signer) keyEncLoad(content []byte) (int, error) {
+	id := 2
+	tx, err := tkeyclient.NewFrameBuf(cmdLoadEncKey, id)
+	if err != nil {
+		return 0, fmt.Errorf("NewFrameBuf: %w", err)
+	}
+
+	payload := make([]byte, cmdLoadEncKey.CmdLen().Bytelen()-1)
+	copied := copy(payload, content)
+
+	// Add padding if not filling the payload buffer.
+	if copied < len(payload) {
+		padding := make([]byte, len(payload)-copied)
+		copy(payload[copied:], padding)
+	}
+
+	copy(tx[2:], payload)
+
+	tkeyclient.Dump("LoadSignData tx", tx)
+	if err = s.tk.Write(tx); err != nil {
+		return 0, fmt.Errorf("Write: %w", err)
+	}
+
+	// Wait for reply
+	rx, _, err := s.tk.ReadFrame(rspSignData, id)
+	if err != nil {
+		return 0, fmt.Errorf("ReadFrame: %w", err)
+	}
+
+	if rx[2] != tkeyclient.StatusOK {
+		return 0, fmt.Errorf("SignData NOK")
+	}
+
+	return copied, nil
+}
+
+func (s Signer) keyEncrypt() ([]byte, error) {
+	id := 2
+
+	tx, err := tkeyclient.NewFrameBuf(cmdEncryptKey, id)
+	if err != nil {
+		return nil, fmt.Errorf("NewFrameBuf: %w", err)
+	}
+
+	tkeyclient.Dump("keyEnc tx", tx)
+	if err = s.tk.Write(tx); err != nil {
+		return nil, fmt.Errorf("Write: %w", err)
+	}
+
+	// Wait for reply
+	rsp := make([]byte, 1676)
+	for i := 0; i < 13; i++ {
+		rx, _, err := s.tk.ReadFrame(rspEncryptKey, id)
+		if err != nil {
+			return nil, fmt.Errorf("ReadFrame i=%d: %w", i, err)
+		}
+		copied := copy(rsp[i*127:i*127+127], rx[2:])
+		if copied != 127 {
+			return nil, fmt.Errorf("ReadFrame copied i=%d: ", i)
+		}
+	}
+	// Read the tail
+	rx, _, err := s.tk.ReadFrame(rspEncryptKey, id)
+	if err != nil {
+		return nil, fmt.Errorf("ReadFrame tail: %w", err)
+	}
+	copied := copy(rsp[1651:], rx[2:2+25])
+	if copied != 25 {
+		return nil, fmt.Errorf("ReadFrame copied=%d: ", copied)
+	}
+
+	return rsp, nil
 }
 
 // getSig gets the RSA signature from the signer app, if
